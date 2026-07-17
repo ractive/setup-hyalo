@@ -43,4 +43,6 @@ jobs:
       - name: Lint the fixture vault
         shell: bash
         working-directory: test/fixture-vault
-        run: hyalo lint --strict --format github
+        # TODO: switch to `--format github` once a hyalo release > v0.17.0
+        # ships it (the annotations format is on main but unreleased).
+        run: hyalo lint --strict
