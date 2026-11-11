@@ -5,8 +5,9 @@ CLI on a runner in seconds and puts it on `PATH`. Use it to add a `hyalo lint`
 PR check to any repository — or to give a [`claude-code-action`](https://github.com/anthropics/claude-code-action)
 agent the `hyalo` binary so it can query and fix your markdown knowledgebase.
 
-No compilation, no Node/Python — the action is pure `bash` + `curl` and downloads
-a release archive that already matches the runner platform.
+No compilation, no Node/Python — the action is pure `bash` + `curl` (+ the
+preinstalled `gh` CLI for provenance verification) and downloads a release
+archive that already matches the runner platform.
 
 ## Usage
 
@@ -32,13 +33,15 @@ or markdown violations.
 | Input          | Default                | Description                                                                 |
 | -------------- | ---------------------- | --------------------------------------------------------------------------- |
 | `version`      | `latest`               | Release to install. `latest` tracks the newest release; pin a tag like `v0.17.0`. |
-| `github-token` | `${{ github.token }}`  | Token for the release-asset API (raises the anonymous rate limit).          |
+| `github-token` | `${{ github.token }}`  | Token for the release-asset API (raises the anonymous rate limit) and the attestation lookup. |
+| `verify-attestation` | `true`           | Verify the archive's build-provenance attestation before installing. See [Verification](#verification). |
 
 ## Outputs
 
 | Output    | Description                                                     |
 | --------- | ------------------------------------------------------------- |
 | `version` | The resolved version tag that was installed (e.g. `v0.17.0`). |
+| `provenance` | `verified`, `exempt` (no attestation was ever published for this release/target; warned) or `disabled`. See [Verification](#verification). |
 
 ```yaml
       - uses: ractive/setup-hyalo@v1
@@ -53,12 +56,56 @@ or markdown violations.
 | OS      | Architecture      | Release target                | Notes                                    |
 | ------- | ----------------- | ----------------------------- | ---------------------------------------- |
 | Linux   | x86_64 / aarch64  | `*-unknown-linux-gnu`         | `ubuntu-latest`, arm runners             |
-| macOS   | aarch64 (arm64)   | `aarch64-apple-darwin`        | `macos-14`+; x86_64 macOS is unsupported |
+| macOS   | aarch64 (arm64)   | `aarch64-apple-darwin`        | `macos-latest`; x86_64 macOS is unsupported |
 | Windows | x86_64 / aarch64  | `*-pc-windows-msvc` (`.zip`)  | steps run in `bash` (preinstalled)       |
 
 hyalo does not publish an x86_64 macOS binary. On an Intel macOS runner the
-action fails with a clear message — use an arm64 runner (`macos-14` or newer) or
+action fails with a clear message — use an arm64 runner (e.g. `macos-latest`) or
 `cargo install hyalo-cli` instead.
+
+## Verification
+
+Every download is checked twice before it is installed:
+
+1. **SHA256SUMS** — the archive's digest must match the release's
+   `SHA256SUMS`. This catches corruption, but the sums file lives in the same
+   release as the archive: anyone who can replace one can replace both.
+2. **Build provenance** — `gh attestation verify` checks the archive's Sigstore
+   attestation: it must have been built from `ractive/hyalo` **at the
+   requested tag** (`--source-ref refs/tags/<version>`) by the shared
+   `ractive/release-workflows/.github/workflows/release.yml` pipeline, on a
+   GitHub-hosted runner. A rebuilt archive has no such attestation, and a
+   genuine archive of another release swapped in carries the wrong tag;
+   either way the step fails.
+
+A missing attestation is a failure, not a warning, except in two cases where
+none was ever published. Both emit a `::warning::` and install after the
+checksum check only:
+
+- **`aarch64-unknown-linux-gnu`** (Linux arm runners) **up to hyalo
+  `v0.26.0`** — this target is cross-compiled, and those releases attest no
+  cross-built archive. The exemption is bounded: any newer release must
+  verify on every target, so `latest` on an arm runner fails closed if a
+  release ever ships this archive unattested.
+- **An explicitly pinned `version:` below `v0.18.0`**, the first fully
+  attested release. If `latest` resolves below it, that is an error: the
+  release API choosing an unverifiable version is exactly what this check
+  guards against.
+
+`gh` is preinstalled on all GitHub-hosted runners and uses `github-token`
+(the workflow token by default, no extra `permissions:` needed). On a
+self-hosted runner without `gh`, either install it or set
+`verify-attestation: false`, which falls back to the checksum check alone.
+
+The extracted binary is cached (see below), with a marker recording how its
+provenance was established. A cache hit is reused only if that marker
+satisfies the current run: an entry cached unverified (by setup-hyalo v1.0.x,
+or with `verify-attestation: false`) is re-downloaded and verified. Anyone who
+can write to the tool cache can forge the marker too; the cache is trusted
+like the runner itself.
+
+The `provenance` output says which path ran: `verified`, `exempt` or
+`disabled`.
 
 ## Caching
 
