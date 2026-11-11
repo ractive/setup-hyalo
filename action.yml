@@ -15,9 +15,19 @@ inputs:
   github-token:
     description: >-
       Token used for GitHub release-asset API calls (raises the anonymous rate
-      limit). Defaults to the workflow token.
+      limit) and for fetching the archive's build-provenance attestation.
+      Defaults to the workflow token.
     required: false
     default: ${{ github.token }}
+  verify-attestation:
+    description: >-
+      Verify the downloaded archive's GitHub build-provenance attestation with
+      `gh attestation verify` before installing it (default "true"). Fails the
+      step if the attestation is missing or doesn't verify. Set "false" only on
+      runners without the gh CLI; integrity then rests on SHA256SUMS alone,
+      which an attacker who can replace release assets can replace too.
+    required: false
+    default: "true"
 
 outputs:
   version:
@@ -31,10 +41,37 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
+        GH_HOST: github.com
         INPUT_VERSION: ${{ inputs.version }}
+        INPUT_VERIFY_ATTESTATION: ${{ inputs.verify-attestation }}
         REPO: ractive/hyalo
+        # hyalo's release.yml calls this reusable workflow, so the Sigstore
+        # certificate's signer identity is release-workflows, not ractive/hyalo:
+        # `gh attestation verify --repo ractive/hyalo` alone rejects every release.
+        SIGNER_WORKFLOW: ractive/release-workflows/.github/workflows/release.yml
+        # First release whose archives carry attestations (v0.17.0 is partial).
+        ATTESTED_FROM: v0.18.0
+        # No hyalo release so far attests cross-built targets (release-workflows
+        # skipped them; fixed in ractive/release-workflows#9). Once a release
+        # ships it, replace this exemption with a per-target version floor.
+        UNATTESTED_TARGETS: aarch64-unknown-linux-gnu
       run: |
         set -euo pipefail
+
+        case "$INPUT_VERIFY_ATTESTATION" in
+          true|false) ;;
+          *) echo "::error::setup-hyalo: invalid 'verify-attestation' input '$INPUT_VERIFY_ATTESTATION' — expected 'true' or 'false'"; exit 1 ;;
+        esac
+
+        # version_lt A B: true when vX.Y.Z tag A sorts before B (both pre-validated).
+        version_lt() {
+          local a1 a2 a3 b1 b2 b3
+          IFS=. read -r a1 a2 a3 <<< "${1#v}"
+          IFS=. read -r b1 b2 b3 <<< "${2#v}"
+          [ "$a1" -lt "$b1" ] && return 0; [ "$a1" -gt "$b1" ] && return 1
+          [ "$a2" -lt "$b2" ] && return 0; [ "$a2" -gt "$b2" ] && return 1
+          [ "$a3" -lt "$b3" ]
+        }
 
         # ---- validate the version input -------------------------------------
         if [ "$INPUT_VERSION" != "latest" ] && ! printf '%s' "$INPUT_VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
@@ -135,6 +172,52 @@ runs:
             exit 1
           fi
           echo "setup-hyalo: sha256 verified (${actual})"
+
+          # ---- verify build provenance ------------------------------------
+          # SHA256SUMS sits next to the archive in the same release, so it only
+          # catches corruption: whoever can replace the archive can replace the
+          # sums. The Sigstore attestation proves the archive was built by
+          # release-workflows from ractive/hyalo on a GitHub-hosted runner.
+          # Whenever an attestation should exist, its absence is fatal — a
+          # warn-and-continue on "not found" would let a swapped asset (whose
+          # new digest has no attestation) straight through.
+          if [ "$INPUT_VERIFY_ATTESTATION" = "true" ]; then
+            skip_reason=""
+            case " ${UNATTESTED_TARGETS} " in
+              *" ${target} "*) skip_reason="hyalo releases publish no provenance attestation for ${target} (cross-built)" ;;
+            esac
+            if [ -z "$skip_reason" ] && version_lt "$version" "$ATTESTED_FROM"; then
+              if [ "$INPUT_VERSION" = "latest" ]; then
+                # 'latest' is chosen by the release API, i.e. by whoever controls
+                # the releases — never let it select an unverifiable version.
+                echo "::error::setup-hyalo: 'latest' resolved to ${version}, which predates attested releases (${ATTESTED_FROM}) — refusing to install it unverified"
+                exit 1
+              fi
+              skip_reason="hyalo ${version} predates attested releases (${ATTESTED_FROM})"
+            fi
+
+            if [ -n "$skip_reason" ]; then
+              echo "::warning::setup-hyalo: ${skip_reason}; installed after SHA256SUMS check only, provenance NOT verified"
+            else
+              if ! command -v gh >/dev/null 2>&1; then
+                echo "::error::setup-hyalo: the gh CLI is required to verify the build-provenance attestation and is not on PATH. Install gh on this runner, or set 'verify-attestation: false' to install without provenance verification."
+                exit 1
+              fi
+              if [ -z "${GH_TOKEN:-}" ]; then
+                echo "::error::setup-hyalo: verifying the build-provenance attestation needs a GitHub token — pass 'github-token', or set 'verify-attestation: false'"
+                exit 1
+              fi
+              if ! verify_out="$(gh attestation verify "${tmp}/${asset}" \
+                    --repo "$REPO" \
+                    --signer-workflow "$SIGNER_WORKFLOW" \
+                    --deny-self-hosted-runners 2>&1)"; then
+                printf '%s\n' "$verify_out"
+                echo "::error::setup-hyalo: build-provenance attestation verification FAILED for ${asset} — refusing to install"
+                exit 1
+              fi
+              echo "setup-hyalo: provenance verified (built by ${SIGNER_WORKFLOW} for ${REPO})"
+            fi
+          fi
 
           mkdir -p -m 0755 "$cache_root"
           if [ "$ext" = "zip" ]; then

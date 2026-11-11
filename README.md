@@ -5,8 +5,9 @@ CLI on a runner in seconds and puts it on `PATH`. Use it to add a `hyalo lint`
 PR check to any repository — or to give a [`claude-code-action`](https://github.com/anthropics/claude-code-action)
 agent the `hyalo` binary so it can query and fix your markdown knowledgebase.
 
-No compilation, no Node/Python — the action is pure `bash` + `curl` and downloads
-a release archive that already matches the runner platform.
+No compilation, no Node/Python — the action is pure `bash` + `curl` (+ the
+preinstalled `gh` CLI for provenance verification) and downloads a release
+archive that already matches the runner platform.
 
 ## Usage
 
@@ -32,7 +33,8 @@ or markdown violations.
 | Input          | Default                | Description                                                                 |
 | -------------- | ---------------------- | --------------------------------------------------------------------------- |
 | `version`      | `latest`               | Release to install. `latest` tracks the newest release; pin a tag like `v0.17.0`. |
-| `github-token` | `${{ github.token }}`  | Token for the release-asset API (raises the anonymous rate limit).          |
+| `github-token` | `${{ github.token }}`  | Token for the release-asset API (raises the anonymous rate limit) and the attestation lookup. |
+| `verify-attestation` | `true`           | Verify the archive's build-provenance attestation before installing. See [Verification](#verification). |
 
 ## Outputs
 
@@ -59,6 +61,40 @@ or markdown violations.
 hyalo does not publish an x86_64 macOS binary. On an Intel macOS runner the
 action fails with a clear message — use an arm64 runner (`macos-14` or newer) or
 `cargo install hyalo-cli` instead.
+
+## Verification
+
+Every download is checked twice before it is installed:
+
+1. **SHA256SUMS** — the archive's digest must match the release's
+   `SHA256SUMS`. This catches corruption, but the sums file lives in the same
+   release as the archive: anyone who can replace one can replace both.
+2. **Build provenance** — `gh attestation verify` checks the archive's Sigstore
+   attestation: it must have been built for `ractive/hyalo` by the shared
+   `ractive/release-workflows/.github/workflows/release.yml` pipeline, on a
+   GitHub-hosted runner. A replaced or rebuilt archive has no such attestation,
+   and the step fails.
+
+A missing attestation is a failure, not a warning, except in two cases where
+none was ever published. Both emit a `::warning::` and install after the
+checksum check only:
+
+- **`aarch64-unknown-linux-gnu`** (Linux arm runners) — this target is
+  cross-compiled, and no hyalo release so far attests cross-built archives.
+  The exemption goes away once one does.
+- **An explicitly pinned `version:` below `v0.18.0`**, the first fully
+  attested release. If `latest` resolves below it, that is an error: the
+  release API choosing an unverifiable version is exactly what this check
+  guards against.
+
+`gh` is preinstalled on all GitHub-hosted runners and uses `github-token`
+(the workflow token by default, no extra `permissions:` needed). On a
+self-hosted runner without `gh`, either install it or set
+`verify-attestation: false`, which falls back to the checksum check alone.
+
+The extracted binary is cached (see below). A cache hit skips the download,
+so verification runs once per version and platform, when the binary first
+enters the cache.
 
 ## Caching
 
