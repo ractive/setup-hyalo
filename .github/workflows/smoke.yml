@@ -43,6 +43,33 @@ jobs:
           RESOLVED: ${{ steps.hyalo.outputs.version }}
         run: echo "resolved=$RESOLVED"
 
+      - name: Assert which provenance path ran
+        shell: bash
+        env:
+          PROVENANCE: ${{ steps.hyalo.outputs.provenance }}
+          # aarch64-unknown-linux-gnu is the one exempt target (up to v0.26.0);
+          # every other job must have verified the attestation. Without this a
+          # regression that silently skips verification would stay green.
+          EXPECTED: ${{ matrix.os == 'ubuntu-24.04-arm' && 'exempt' || 'verified' }}
+        run: |
+          echo "provenance=$PROVENANCE (expected $EXPECTED)"
+          [ "$PROVENANCE" = "$EXPECTED" ]
+
+      - name: Install again (tool-cache hit)
+        id: hyalo-cached
+        uses: ./
+        with:
+          version: ${{ steps.hyalo.outputs.version }}
+
+      - name: Assert the cache hit kept the provenance
+        shell: bash
+        env:
+          FIRST: ${{ steps.hyalo.outputs.provenance }}
+          SECOND: ${{ steps.hyalo-cached.outputs.provenance }}
+        run: |
+          echo "first=$FIRST second=$SECOND"
+          [ "$FIRST" = "$SECOND" ]
+
       - name: Lint the fixture vault
         shell: bash
         working-directory: test/fixture-vault
