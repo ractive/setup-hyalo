@@ -16,8 +16,9 @@ jobs:
       matrix:
         # macos-latest is arm64 (aarch64-apple-darwin) — the only macOS target
         # hyalo ships. (macos-14 was retired: "configuration not supported".)
-        # ubuntu-24.04-arm installs aarch64-unknown-linux-gnu, the one target
-        # without a provenance attestation: it exercises the warn-and-skip path.
+        # ubuntu-24.04-arm installs aarch64-unknown-linux-gnu, unattested
+        # through v0.26.0: the v0.18.0 job exercises the warn-and-skip
+        # (exempt) path, and latest (v0.26.1+) must verify.
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
         version: [latest, v0.18.0]
     runs-on: ${{ matrix.os }}
@@ -47,14 +48,24 @@ jobs:
         shell: bash
         env:
           PROVENANCE: ${{ steps.hyalo.outputs.provenance }}
-          # aarch64-unknown-linux-gnu is exempt only up to v0.26.0, so only the
-          # arm job pinned to v0.18.0 may skip; 'latest' (v0.26.1+, attested)
-          # must verify on arm too. Without this a regression that silently
-          # skips verification would stay green.
-          EXPECTED: ${{ matrix.os == 'ubuntu-24.04-arm' && matrix.version != 'latest' && 'exempt' || 'verified' }}
+          RESOLVED: ${{ steps.hyalo.outputs.version }}
+          OS: ${{ matrix.os }}
+          # aarch64-unknown-linux-gnu is exempt only up to v0.26.0, so an arm
+          # job may skip only when the resolved version is at or below it;
+          # everything else must verify. Without this a regression that
+          # silently skips verification would stay green. Kept independent of
+          # action.yml's UNATTESTED_THROUGH on purpose, so a wrong boundary
+          # there fails here.
+          EXEMPT_THROUGH: v0.26.0
         run: |
-          echo "provenance=$PROVENANCE (expected $EXPECTED)"
-          [ "$PROVENANCE" = "$EXPECTED" ]
+          expected=verified
+          # sort -V is GNU coreutils; this branch only runs on Linux.
+          if [ "$OS" = ubuntu-24.04-arm ] &&
+             [ "$(printf '%s\n' "$RESOLVED" "$EXEMPT_THROUGH" | sort -V | tail -1)" = "$EXEMPT_THROUGH" ]; then
+            expected=exempt
+          fi
+          echo "provenance=$PROVENANCE resolved=$RESOLVED (expected $expected)"
+          [ "$PROVENANCE" = "$expected" ]
 
       - name: Install again (tool-cache hit)
         id: hyalo-cached
