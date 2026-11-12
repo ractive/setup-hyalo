@@ -47,10 +47,11 @@ jobs:
         shell: bash
         env:
           PROVENANCE: ${{ steps.hyalo.outputs.provenance }}
-          # aarch64-unknown-linux-gnu is the one exempt target (up to v0.26.0);
-          # every other job must have verified the attestation. Without this a
-          # regression that silently skips verification would stay green.
-          EXPECTED: ${{ matrix.os == 'ubuntu-24.04-arm' && 'exempt' || 'verified' }}
+          # aarch64-unknown-linux-gnu is exempt only up to v0.26.0, so only the
+          # arm job pinned to v0.18.0 may skip; 'latest' (v0.26.1+, attested)
+          # must verify on arm too. Without this a regression that silently
+          # skips verification would stay green.
+          EXPECTED: ${{ matrix.os == 'ubuntu-24.04-arm' && matrix.version != 'latest' && 'exempt' || 'verified' }}
         run: |
           echo "provenance=$PROVENANCE (expected $EXPECTED)"
           [ "$PROVENANCE" = "$EXPECTED" ]
