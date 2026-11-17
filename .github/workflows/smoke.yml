@@ -54,7 +54,8 @@ jobs:
           # job may skip only when the resolved version is at or below it;
           # everything else must verify. Without this a regression that
           # silently skips verification would stay green. Kept independent of
-          # action.yml's UNATTESTED_THROUGH on purpose, so a wrong boundary
+          # the 'unattested-through' that action.yml passes to
+          # ractive/release-workflows/setup on purpose, so a wrong boundary
           # there fails here.
           EXEMPT_THROUGH: v0.26.0
         run: |
@@ -86,3 +87,24 @@ jobs:
         shell: bash
         working-directory: test/fixture-vault
         run: hyalo lint --strict --format github
+
+  # hyalo ships no x86_64 macOS build: the action must refuse up front.
+  intel-macos:
+    runs-on: macos-15-intel
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install hyalo via setup-hyalo (must fail)
+        id: hyalo
+        continue-on-error: true
+        uses: ./
+
+      - name: Assert the install was refused before any download
+        shell: bash
+        env:
+          OUTCOME: ${{ steps.hyalo.outcome }}
+        run: |
+          echo "outcome=$OUTCOME"
+          [ "$OUTCOME" = failure ]
+          ! command -v hyalo

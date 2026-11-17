@@ -44,8 +44,18 @@ outputs:
 runs:
   using: composite
   steps:
+    # hyalo publishes no x86_64 macOS build. Say so up front, with the way
+    # out, instead of the shared action's generic "no archive for this
+    # runner".
+    - name: Refuse Intel macOS
+      if: runner.os == 'macOS' && runner.arch == 'X64'
+      shell: bash
+      run: |
+        echo "::error::setup-hyalo: no prebuilt macOS binary for x86_64 — hyalo publishes aarch64-apple-darwin only. Use an arm64 macOS runner (e.g. macos-latest) or 'cargo install hyalo-cli'."
+        exit 1
+
     - id: install
-      uses: ractive/release-workflows/setup@d7439bdb0e54ad188aa818e2ba0f86b5d57a7cdc # v0.8.0
+      uses: ractive/release-workflows/setup@d69f242378f228560fdf2fb7ce851c2d8fb6a11e # v0.8.1
       with:
         repo: ractive/hyalo
         version: ${{ inputs.version }}
