@@ -9,6 +9,11 @@ No compilation, no Node/Python — the action is pure `bash` + `curl` (+ the
 preinstalled `gh` CLI for provenance verification) and downloads a release
 archive that already matches the runner platform.
 
+It is a thin wrapper around
+[`ractive/release-workflows/setup`](https://github.com/ractive/release-workflows#installing-a-release-binary-setupactionyml),
+the installer shared with [setup-ff-rdp](https://github.com/ractive/setup-ff-rdp);
+this repo keeps hyalo's inputs, outputs and exemption values.
+
 ## Usage
 
 ```yaml
@@ -99,8 +104,8 @@ self-hosted runner without `gh`, either install it or set
 
 The extracted binary is cached (see below), with a marker recording how its
 provenance was established. A cache hit is reused only if that marker
-satisfies the current run: an entry cached unverified (by setup-hyalo v1.0.x,
-or with `verify-attestation: false`) is re-downloaded and verified. Anyone who
+satisfies the current run: an entry without a marker, or cached with
+`verify-attestation: false`, is re-downloaded and verified. Anyone who
 can write to the tool cache can forge the marker too; the cache is trusted
 like the runner itself.
 
