@@ -9,6 +9,14 @@ No compilation, no Node/Python — the action is pure `bash` + `curl` (+ the
 preinstalled `gh` CLI for provenance verification) and downloads a release
 archive that already matches the runner platform.
 
+It is a thin wrapper around
+[`ractive/release-workflows/setup`](https://github.com/ractive/release-workflows#installing-a-release-binary-setupactionyml),
+the installer shared with [setup-ff-rdp](https://github.com/ractive/setup-ff-rdp);
+this repo keeps hyalo's inputs, outputs and exemption values. The shared
+action is fetched at run time, pinned by commit SHA, so an organisation that
+restricts which actions may run must allow `ractive/release-workflows/setup`
+as well as `ractive/setup-hyalo`.
+
 ## Usage
 
 ```yaml
@@ -55,13 +63,13 @@ or markdown violations.
 
 | OS      | Architecture      | Release target                | Notes                                    |
 | ------- | ----------------- | ----------------------------- | ---------------------------------------- |
-| Linux   | x86_64 / aarch64  | `*-unknown-linux-gnu`         | `ubuntu-latest`, arm runners             |
+| Linux   | x86_64 / aarch64  | `*-unknown-linux-gnu`         | `ubuntu-latest`, arm runners; `*-unknown-linux-musl` on a musl userland (Alpine container) |
 | macOS   | aarch64 (arm64)   | `aarch64-apple-darwin`        | `macos-latest`; x86_64 macOS is unsupported |
 | Windows | x86_64 / aarch64  | `*-pc-windows-msvc` (`.zip`)  | steps run in `bash` (preinstalled)       |
 
 hyalo does not publish an x86_64 macOS binary. On an Intel macOS runner the
-action fails with a clear message — use an arm64 runner (e.g. `macos-latest`) or
-`cargo install hyalo-cli` instead.
+action fails up front, before downloading anything, with a message saying so —
+use an arm64 runner (e.g. `macos-latest`) or `cargo install hyalo-cli` instead.
 
 ## Verification
 
@@ -88,9 +96,9 @@ checksum check only:
   verify on every target, so `latest` on an arm runner fails closed if a
   release ever ships this archive unattested.
 - **An explicitly pinned `version:` below `v0.18.0`**, the first fully
-  attested release. If `latest` resolves below it, that is an error: the
-  release API choosing an unverifiable version is exactly what this check
-  guards against.
+  attested release. If `latest` resolves below it, or to an exempted
+  release, the shared action fails: the release API choosing an unverifiable
+  version is exactly what this check guards against.
 
 `gh` is preinstalled on all GitHub-hosted runners and uses `github-token`
 (the workflow token by default, no extra `permissions:` needed). On a
@@ -98,19 +106,23 @@ self-hosted runner without `gh`, either install it or set
 `verify-attestation: false`, which falls back to the checksum check alone.
 
 The extracted binary is cached (see below), with a marker recording how its
-provenance was established. A cache hit is reused only if that marker
-satisfies the current run: an entry cached unverified (by setup-hyalo v1.0.x,
-or with `verify-attestation: false`) is re-downloaded and verified. Anyone who
-can write to the tool cache can forge the marker too; the cache is trusted
-like the runner itself.
+provenance was established (`verified`, `exempt` or `disabled`). A cache
+entry is reused only if it holds the binary and a marker that satisfies the
+current run; any other entry — no marker, or one weaker than the run requires,
+such as `disabled` from a `verify-attestation: false` run — is re-downloaded
+and verified. An entry is extracted beside its final place and renamed in
+with its marker already written, so an interrupted install leaves no entry
+behind. Anyone who can write to the tool cache can forge the marker too; the
+cache is trusted like the runner itself.
 
 The `provenance` output says which path ran: `verified`, `exempt` or
 `disabled`.
 
 ## Caching
 
-The extracted binary is cached under `RUNNER_TOOL_CACHE`, keyed by version +
-platform. Repeat runs on the same version skip the download.
+The extracted binary is cached under
+`$RUNNER_TOOL_CACHE/release-workflows-setup/ractive/hyalo/hyalo/<version>/<target>`.
+Repeat runs of the same version on the same runner skip the download.
 
 ## Pinning
 
